@@ -30,3 +30,5 @@ tests/*.pdf
 tests/*.png
 tests/.stamped/
 sample/
+qa_sample/
+qa_sample/.stamped/

@@ -20,7 +20,7 @@ python autostamper.py
 ## How to use
 1. **Pick folder** — Browse for folder with PDFs. Files appear in the queue as Pending.
 2. **Pick stamp PNG** — Transparent PNG is recommended.
-3. **Adjust stamp box** — Drag inside the canvas to move, drag handles to resize. Box position is saved as ratio to page size.
+3. **Adjust stamp box** — Drag inside the canvas to move, drag handles to resize. Box shows live preview of the stamp PNG stretched to fit (`keep_proportion=False`); position is saved as ratio to page size.
 4. **Target page** — Choose Last Page (default) or First Page.
 5. **Lock Standard** — Click “Lock Current as Standard” to capture current page size and box. Later files that differ by >3 pt will pause for your choice.
 6. **Start Batch** — Output goes to `<input>/.stamped/<filename>` with `garbage=3, deflate=True`.
