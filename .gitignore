@@ -24,3 +24,7 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+
+# Autostamper output (also ignore test PDFs)
+tests/*.pdf
+sample/
