@@ -20,7 +20,7 @@ python autostamper.py
 ## How to use
 1. **Pick folder** — Browse for folder with PDFs. Files appear in the queue as Pending.
 2. **Pick stamp PNG** — Transparent PNG is recommended.
-3. **Adjust stamp box** — Drag inside the canvas to move, drag handles to resize. Box shows live preview of the stamp PNG stretched to fit (`keep_proportion=False`); position is saved as ratio to page size.
+3. **Adjust stamp box** — Drag inside the canvas to move, drag handles to resize. Box shows live preview of the stamp PNG; toggle **Lock aspect ratio** to keep proportions (prevents warping). Position is saved as ratio to page size.
 4. **Target page** — Choose Last Page (default) or First Page.
 5. **Lock Standard** — Click “Lock Current as Standard” to capture current page size and box. Later files that differ by >3 pt will pause for your choice.
 6. **Start Batch** — Output goes to `<input>/.stamped/<filename>` with `garbage=3, deflate=True`.
@@ -56,6 +56,7 @@ Modular layout is intentional — smaller files make bug tracking and revert eas
 - Only one PDF is open at a time; `doc.close()` + `del doc` each iteration — zero leak.
 - Scanning is case-insensitive deduped; preview on demand via `page.get_pixmap(dpi=96)` → `QPixmap`, no doc caching.
 - UI stays responsive — all I/O in `QThread`, progress via signals.
+- **Aspect lock:** when enabled, resize handles keep stamp proportions (uses `keep_proportion=True` on insert); otherwise free stretch (`keep_proportion=False` per spec).
 
 ## Commit history
 Atomic commits using Conventional Commits (`feat:`, `fix:`, `chore:`, `docs:`). Small scope per commit for easy `git bisect`/`revert`.
