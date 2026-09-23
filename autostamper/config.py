@@ -12,6 +12,7 @@ class StampConfig:
     target_page: str = "last"
     tolerance: float = 3.0
     is_locked: bool = False
+    keep_aspect: bool = False
 
     def is_valid(self) -> bool:
         return (
