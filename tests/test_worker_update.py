@@ -11,6 +11,25 @@ import fitz
 app = QApplication([])
 inp = Path("tests")
 shutil.rmtree(inp / ".stamped", ignore_errors=True)
+
+def _ensure_fixtures2():
+    inp.mkdir(exist_ok=True)
+    for name,w,h in [("a4.pdf",595,842),("letter.pdf",612,792)]:
+        p=inp/name
+        if not p.exists():
+            doc=fitz.open()
+            pg=doc.new_page(width=w,height=h)
+            pg.insert_text((50,50), f"Test {name}", fontsize=12)
+            doc.save(str(p)); doc.close()
+    sp=inp/"stamp.png"
+    if not sp.exists():
+        try:
+            from PIL import Image
+            Image.new("RGBA",(200,80),(255,0,0,120)).save(str(sp))
+        except Exception:
+            pass
+_ensure_fixtures2()
+
 pdfs = sorted(list(inp.glob("*.pdf")))  # a4, letter - order alphabetical a4 first
 # reverse to have letter first then a4 to test update
 pdfs = [Path("tests/letter.pdf"), Path("tests/a4.pdf")]

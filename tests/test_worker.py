@@ -18,6 +18,30 @@ inp = Path("tests")
 import shutil
 shutil.rmtree(inp / ".stamped", ignore_errors=True)
 
+# ensure fixtures exist (self-contained)
+def _ensure_fixtures():
+    inp.mkdir(exist_ok=True)
+    for name, w, h in [("a4.pdf", 595, 842), ("letter.pdf", 612, 792)]:
+        p = inp / name
+        if not p.exists():
+            doc = fitz.open()
+            pg = doc.new_page(width=w, height=h)
+            pg.draw_rect(fitz.Rect(10, 10, w-10, h-10), color=(0,0,0), width=1)
+            pg.insert_text((50,50), f"Test {name} {w}x{h}", fontsize=12)
+            doc.save(str(p))
+            doc.close()
+    sp = inp / "stamp.png"
+    if not sp.exists():
+        try:
+            from PIL import Image
+            img = Image.new("RGBA", (200,80), (255,0,0,120))
+            img.save(str(sp))
+        except Exception:
+            # fallback: create empty png via pixmap
+            pass
+
+_ensure_fixtures()
+
 pdfs = sorted(list(inp.glob("*.pdf")))
 stamp = Path("tests/stamp.png")
 

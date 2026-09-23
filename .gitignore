@@ -27,4 +27,6 @@ Thumbs.db
 
 # Autostamper output (also ignore test PDFs)
 tests/*.pdf
+tests/*.png
+tests/.stamped/
 sample/
