@@ -5,7 +5,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QLineEdit, QPushButton, QFileDialog, QSplitter,
-    QGroupBox, QRadioButton, QTableWidget, QTableWidgetItem,
+    QGroupBox, QRadioButton, QCheckBox, QTableWidget, QTableWidgetItem,
     QHeaderView, QProgressBar, QFrame, QMessageBox
 )
 
@@ -107,6 +107,10 @@ class MainWindow(QMainWindow):
         self.standard_label.setStyleSheet("color: #333; font-size: 12px;")
         r_layout.addWidget(self.standard_label)
 
+        self.aspect_check = QCheckBox("Lock aspect ratio")
+        self.aspect_check.setToolTip("Prevent stamp from stretching — keep original image proportions")
+        r_layout.addWidget(self.aspect_check)
+
         r_layout.addWidget(QLabel("File Queue:"))
         self.table = QTableWidget(0, 3)
         self.table.setHorizontalHeaderLabels(["Filename", "Status", "Dimensions"])
@@ -146,6 +150,7 @@ class MainWindow(QMainWindow):
         self.browse_stamp_btn.clicked.connect(self.pick_stamp)
         self.radio_last.toggled.connect(self.on_target_changed)
         self.lock_btn.clicked.connect(self.on_lock)
+        self.aspect_check.toggled.connect(self.on_aspect_toggled)
         self.canvas.config_changed.connect(self.on_canvas_config)
         self.start_btn.clicked.connect(self.start_batch)
         self.btn_apply_once.clicked.connect(self.on_apply_once)
@@ -219,8 +224,28 @@ class MainWindow(QMainWindow):
         self.standard_label.setText(self.config.label())
         self.canvas.set_config(self.config)
 
+    def on_aspect_toggled(self, checked: bool):
+        self.config.keep_aspect = checked
+        if checked and self.canvas._stamp_pixmap and not self.canvas._stamp_pixmap.isNull():
+            aspect = self.canvas._stamp_pixmap.width() / max(1, self.canvas._stamp_pixmap.height())
+            W = self.canvas._page_w or 612
+            H = self.canvas._page_h or 792
+            cur_pdf_aspect = (self.config.rel_w * W) / max(0.001, self.config.rel_h * H)
+            if abs(cur_pdf_aspect - aspect) > 0.01:
+                new_h = self.config.rel_w * W / (aspect * H)
+                if self.config.rel_y + new_h <= 1.0 and new_h > 0.02:
+                    self.config.rel_h = new_h
+                else:
+                    new_w = self.config.rel_h * aspect * H / W
+                    if self.config.rel_x + new_w <= 1.0:
+                        self.config.rel_w = new_w
+                self.canvas.set_config(self.config)
+        self.canvas.update()
+        self.status_label.setText(f"Aspect lock {'ON' if checked else 'OFF'} — {'proportions kept' if checked else 'free stretch'}")
+
     def on_canvas_config(self, cfg):
         self.config = cfg
+        self.aspect_check.setChecked(cfg.keep_aspect)
         if self.config.is_locked:
             self.standard_label.setText(self.config.label())
 
