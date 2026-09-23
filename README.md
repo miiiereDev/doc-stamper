@@ -60,7 +60,7 @@ Modular layout is intentional — smaller files make bug tracking and revert eas
 - Only one PDF is open at a time; `doc.close()` + `del doc` each iteration — zero leak.
 - Scanning is case-insensitive deduped; preview on demand via `page.get_pixmap(dpi=96)` → `QPixmap`, no doc caching.
 - UI stays responsive — all I/O in `QThread`, progress via signals.
-- **Aspect lock:** when enabled, resize handles keep stamp proportions (uses `keep_proportion=True` on insert); otherwise free stretch (`keep_proportion=False` per spec).
+- **Aspect lock:** when enabled, resize handles keep stamp proportions (uses `keep_proportion=True` on insert); otherwise free stretch (`keep_proportion=False` per spec). Page switch now always preserves aspect — height-anchored (`rel_h` constant, `rel_w = rel_h·aspect·H/W`) with safest-bounds shift if `rel_x+rel_w>1`; works even when lock is OFF so selector never warps on different W×H (decision A).
 
 ## Tests
 ```bash

@@ -37,6 +37,52 @@ class PDFCanvasWidget(QWidget):
         self.setMinimumSize(400, 300)
         self.setStyleSheet("background: #2b2b2b;")
 
+    def _preserve_aspect_height_anchored(self):
+        """Enforce static aspect on page switch — always, height-anchored.
+
+        Per QA decision: preserve relative height (rel_h), recompute rel_w
+        from image aspect so selector never warps when W/H changes.
+        Overflow -> shift X to safest bounds (mathematically fit inside 0..1).
+        Runs regardless of keep_aspect (decision A) — lock only affects drag.
+        """
+        if not self._stamp_pixmap or self._stamp_pixmap.isNull():
+            return
+        if self._page_w <= 0 or self._page_h <= 0:
+            return
+        aspect = self._stamp_pixmap.width() / max(1, self._stamp_pixmap.height())
+        if aspect <= 0:
+            return
+        cur_h = max(0.02, min(0.98, self.config.rel_h))
+        new_w = cur_h * aspect * self._page_h / max(0.001, self._page_w)
+        new_w = max(0.02, min(0.98, new_w))
+        new_x = self.config.rel_x
+        # safest bounds: shift left if overflow, else keep left anchored
+        if new_x + new_w > 1.0:
+            new_x = 1.0 - new_w
+            if new_x < 0:
+                new_x = 0
+                if new_x + new_w > 1.0:
+                    new_w = 1.0 - new_x
+                    new_w = max(0.02, new_w)
+        new_y = self.config.rel_y
+        if new_y + cur_h > 1.0:
+            new_y = max(0.0, 1.0 - cur_h)
+        changed = False
+        if abs(new_w - self.config.rel_w) > 1e-6:
+            self.config.rel_w = new_w
+            changed = True
+        if abs(new_x - self.config.rel_x) > 1e-6:
+            self.config.rel_x = new_x
+            changed = True
+        if abs(cur_h - self.config.rel_h) > 1e-6:
+            self.config.rel_h = cur_h
+            changed = True
+        if abs(new_y - self.config.rel_y) > 1e-6:
+            self.config.rel_y = new_y
+            changed = True
+        if changed:
+            self.config_changed.emit(self.config)
+
     def set_stamp(self, png_path: Path | str | None):
         if not png_path:
             self._stamp_pixmap = None
@@ -52,6 +98,9 @@ class PDFCanvasWidget(QWidget):
             self._stamp_pixmap = None
         else:
             self._stamp_pixmap = pm
+        # keep current page's box aspect-static even on stamp swap
+        if self._pixmap:
+            self._preserve_aspect_height_anchored()
         self.update()
 
     def set_config(self, config: StampConfig):
@@ -83,6 +132,8 @@ class PDFCanvasWidget(QWidget):
             self._pixmap = QPixmap.fromImage(img)
             doc.close()
             del doc
+            # always keep aspect static on page change — height anchored, safest bounds
+            self._preserve_aspect_height_anchored()
             self.update()
             return True
         except Exception:
