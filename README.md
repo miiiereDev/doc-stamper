@@ -17,13 +17,17 @@ pip install -r requirements.txt
 python autostamper.py
 ```
 
+## Modes
+* **Manual (Default)** — No standard. Step through files one by one. Click a file in the queue or use **Prev/Next**, adjust the blue box, then **Stamp & Save This File** (saves to `.stamped/` and auto-advances) or **Skip**. Ideal for mixed sizes where each page needs a tweak.
+* **Automatic (Batch)** — Same as before but toggles hidden unless this mode is selected. Uses `Lock Current as Standard` + `Standard` label + **Start Batch** with pause-and-adjust on dimension mismatch (3 pt tolerance).
+
 ## How to use
-1. **Pick folder** — Browse for folder with PDFs. Files appear in the queue as Pending.
-2. **Pick stamp PNG** — Transparent PNG is recommended.
-3. **Adjust stamp box** — Drag inside the canvas to move, drag handles to resize. Box shows live preview of the stamp PNG; toggle **Lock aspect ratio** to keep proportions (prevents warping). Position is saved as ratio to page size.
-4. **Target page** — Choose Last Page (default) or First Page.
-5. **Lock Standard** — Click “Lock Current as Standard” to capture current page size and box. Later files that differ by >3 pt will pause for your choice.
-6. **Start Batch** — Output goes to `<input>/.stamped/<filename>` with `garbage=3, deflate=True`.
+1. **Pick mode** — Top of right panel: `Manual` (default) or `Automatic`.
+2. **Pick folder** — Browse for folder with PDFs. Files appear in the queue as Pending.
+3. **Pick stamp PNG** — Transparent PNG is recommended.
+4. **Adjust stamp box** — Drag inside the canvas to move, drag handles to resize. Box shows live preview; toggle **Lock aspect ratio** to keep proportions (prevents warping). Position is saved as ratio to page size.
+5. **Manual:** use `Prev`/`Next` or click queue, then `Stamp & Save This File` per file.
+   **Automatic:** optionally **Lock Current as Standard**, then **Start Batch** — Output goes to `<input>/.stamped/<filename>` with `garbage=3, deflate=True`.
 
 ## Dimension lock
 If locked and next PDF size differs by more than 3 pt in width or height, the worker pauses and you choose:
@@ -58,12 +62,20 @@ Modular layout is intentional — smaller files make bug tracking and revert eas
 - UI stays responsive — all I/O in `QThread`, progress via signals.
 - **Aspect lock:** when enabled, resize handles keep stamp proportions (uses `keep_proportion=True` on insert); otherwise free stretch (`keep_proportion=False` per spec).
 
+## Tests
+```bash
+pytest -v                  # unit tests: config, canvas, modes
+python tests/test_worker.py         # integration: batch with mismatch
+python tests/test_worker_update.py  # integration: update/skip
+```
+`conftest.py` ignores legacy integration files during `pytest` collection; they run standalone.
+
 ## Commit history
-Atomic commits using Conventional Commits (`feat:`, `fix:`, `chore:`, `docs:`). Small scope per commit for easy `git bisect`/`revert`.
+Atomic commits using Conventional Commits (`feat:`, `fix:`, `chore:`, `docs:`, `test:`). Small scope per commit for easy `git bisect`/`revert`.
 - `chore(repo):` init + structure
-- `feat(config):` StampConfig
-- `feat(canvas):` overlay
+- `feat(config):` StampConfig + keep_aspect
+- `feat(canvas):` overlay + aspect + preview
 - `feat(worker):` QThread loop
-- `feat(ui):` MainWindow
-- `fix(ui):` dedup
+- `feat(modes):` Manual/Automatic switch
+- `test(config/canvas/modes):` unit tests
 - `docs(readme):` this file
