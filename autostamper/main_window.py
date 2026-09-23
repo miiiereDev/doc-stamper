@@ -170,7 +170,8 @@ class MainWindow(QMainWindow):
         self.validate_start()
 
     def scan_pdfs(self, folder: Path):
-        self.pdf_paths = sorted([p for p in folder.glob("*.pdf")] + [p for p in folder.glob("*.PDF")])
+        found = {p.resolve(): p for p in list(folder.glob("*.pdf")) + list(folder.glob("*.PDF"))}
+        self.pdf_paths = sorted(found.values())
         self.table.setRowCount(0)
         for pdf in self.pdf_paths:
             row = self.table.rowCount()
