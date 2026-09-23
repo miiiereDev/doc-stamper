@@ -167,6 +167,7 @@ class MainWindow(QMainWindow):
         if not f:
             return
         self.stamp_edit.setText(f)
+        self.canvas.set_stamp(f)
         self.validate_start()
 
     def scan_pdfs(self, folder: Path):

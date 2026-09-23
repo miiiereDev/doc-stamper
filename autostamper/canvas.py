@@ -18,6 +18,7 @@ class PDFCanvasWidget(QWidget):
         super().__init__(parent)
         self.config = config
         self._pixmap: QPixmap | None = None
+        self._stamp_pixmap: QPixmap | None = None
         self._page_w: float = 612.0
         self._page_h: float = 792.0
         self._pdf_path: Path | None = None
@@ -35,6 +36,23 @@ class PDFCanvasWidget(QWidget):
         self.setMouseTracking(True)
         self.setMinimumSize(400, 300)
         self.setStyleSheet("background: #2b2b2b;")
+
+    def set_stamp(self, png_path: Path | str | None):
+        if not png_path:
+            self._stamp_pixmap = None
+            self.update()
+            return
+        p = Path(png_path)
+        if not p.exists():
+            self._stamp_pixmap = None
+            self.update()
+            return
+        pm = QPixmap(str(p))
+        if pm.isNull():
+            self._stamp_pixmap = None
+        else:
+            self._stamp_pixmap = pm
+        self.update()
 
     def set_config(self, config: StampConfig):
         self.config = config
@@ -145,8 +163,16 @@ class PDFCanvasWidget(QWidget):
         painter.drawPixmap(target.toRect(), self._pixmap)
 
         r = self._stamp_rect()
+        if self._stamp_pixmap and not self._stamp_pixmap.isNull():
+            painter.setOpacity(0.85)
+            painter.drawPixmap(r.toRect(), self._stamp_pixmap)
+            painter.setOpacity(1.0)
+        else:
+            painter.setBrush(QBrush(QColor(0, 191, 255, 40)))
+            painter.drawRect(r)
+            painter.setBrush(QBrush(Qt.NoBrush))
         painter.setPen(QPen(QColor("#00BFFF"), 2, Qt.DashLine))
-        painter.setBrush(QBrush(QColor(0, 191, 255, 40)))
+        painter.setBrush(QBrush(Qt.NoBrush))
         painter.drawRect(r)
 
         painter.setPen(QPen(QColor("#00BFFF"), 1))
