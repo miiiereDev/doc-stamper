@@ -40,3 +40,4 @@ qa_sample/.stamped/
 *.zip
 *.exe
 build*.log
+releases/
