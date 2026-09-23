@@ -255,6 +255,60 @@ class PDFCanvasWidget(QWidget):
                 r.setBottom(max(r.top() + 12, r.bottom() + dy))
                 r.setBottom(min(r.bottom(), d.bottom()))
 
+            if self.config.keep_aspect:
+                aspect = None
+                if self._stamp_pixmap and not self._stamp_pixmap.isNull():
+                    aspect = self._stamp_pixmap.width() / max(1, self._stamp_pixmap.height())
+                elif self._orig_rect.height() != 0:
+                    aspect = self._orig_rect.width() / self._orig_rect.height()
+                if aspect and aspect > 0:
+                    w = r.width()
+                    h = r.height()
+                    dirc = self._resize_dir
+                    if dirc in ("tl", "tr", "bl", "br"):
+                        if w / max(1, h) > aspect:
+                            new_w = h * aspect
+                            if "l" in dirc:
+                                r.setLeft(r.right() - new_w)
+                            else:
+                                r.setRight(r.left() + new_w)
+                        else:
+                            new_h = w / aspect
+                            if "t" in dirc:
+                                r.setTop(r.bottom() - new_h)
+                            else:
+                                r.setBottom(r.top() + new_h)
+                    elif dirc in ("l", "r"):
+                        new_h = w / aspect
+                        cy = self._orig_rect.center().y()
+                        r.setTop(cy - new_h / 2)
+                        r.setBottom(cy + new_h / 2)
+                        if r.top() < d.top():
+                            r.moveTop(d.top())
+                        if r.bottom() > d.bottom():
+                            r.moveBottom(d.bottom())
+                        if r.height() != new_h:
+                            adj_w = r.height() * aspect
+                            if dirc == "l":
+                                r.setLeft(r.right() - adj_w)
+                            else:
+                                r.setRight(r.left() + adj_w)
+                    elif dirc in ("t", "b"):
+                        new_w = h * aspect
+                        cx = self._orig_rect.center().x()
+                        r.setLeft(cx - new_w / 2)
+                        r.setRight(cx + new_w / 2)
+                        if r.left() < d.left():
+                            r.moveLeft(d.left())
+                        if r.right() > d.right():
+                            r.moveRight(d.right())
+                        if r.width() != new_w:
+                            adj_h = r.width() / aspect
+                            if dirc == "t":
+                                r.setTop(r.bottom() - adj_h)
+                            else:
+                                r.setBottom(r.top() + adj_h)
+
             self.config.rel_x = (r.x() - d.x()) / d.width()
             self.config.rel_y = (r.y() - d.y()) / d.height()
             self.config.rel_w = r.width() / d.width()
