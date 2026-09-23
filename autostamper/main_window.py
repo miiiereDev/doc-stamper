@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QLabel, QLineEdit, QPushButton, QFileDialog, QSplitter,
     QGroupBox, QRadioButton, QCheckBox, QTableWidget, QTableWidgetItem,
     QHeaderView, QProgressBar, QFrame, QMessageBox, QStackedWidget,
-    QSlider, QSpinBox
+    QSlider, QSpinBox, QTabWidget
 )
 
 from .canvas import PDFCanvasWidget
@@ -90,40 +90,57 @@ class MainWindow(QMainWindow):
         splitter.addWidget(self.canvas)
 
         right = QWidget()
-        right.setMinimumWidth(320)
-        right.setMaximumWidth(420)
+        right.setMinimumWidth(360)
+        right.setMaximumWidth(440)
         r_layout = QVBoxLayout(right)
         r_layout.setContentsMargins(6, 6, 6, 6)
+        r_layout.setSpacing(6)
 
-        mode_grp = QGroupBox("Mode")
-        m_layout = QVBoxLayout(mode_grp)
-        self.radio_manual = QRadioButton("Manual — One by one (Default)")
-        self.radio_auto = QRadioButton("Automatic — Batch with Standard")
+        # Tabbed right panel — Option A
+        self.right_tabs = QTabWidget()
+        self.right_tabs.setTabPosition(QTabWidget.North)
+
+        # Stamp Tools tab
+        stamp_tab = QWidget()
+        s_layout = QVBoxLayout(stamp_tab)
+        s_layout.setContentsMargins(6, 6, 6, 6)
+        s_layout.setSpacing(8)
+
+        # Mode + Target Page compact bar
+        mode_row = QHBoxLayout()
+        mode_row.setSpacing(8)
+        mode_row.addWidget(QLabel("Mode:"))
+        self.radio_manual = QRadioButton("Manual")
+        self.radio_auto = QRadioButton("Automatic")
         self.radio_manual.setChecked(True)
-        m_layout.addWidget(self.radio_manual)
-        m_layout.addWidget(self.radio_auto)
-        r_layout.addWidget(mode_grp)
+        self.radio_manual.setToolTip("One by one (Default)")
+        self.radio_auto.setToolTip("Batch with Standard")
+        mode_row.addWidget(self.radio_manual)
+        mode_row.addWidget(self.radio_auto)
+        mode_row.addStretch()
+        s_layout.addLayout(mode_row)
 
-        grp = QGroupBox("Target Page")
-        g_layout = QVBoxLayout(grp)
-        self.radio_last = QRadioButton("Last Page (Default)")
-        self.radio_first = QRadioButton("First Page")
+        page_row = QHBoxLayout()
+        page_row.setSpacing(8)
+        page_row.addWidget(QLabel("Page:"))
+        self.radio_last = QRadioButton("Last")
+        self.radio_first = QRadioButton("First")
         self.radio_last.setChecked(True)
-        g_layout.addWidget(self.radio_last)
-        g_layout.addWidget(self.radio_first)
-        r_layout.addWidget(grp)
-
-        self.aspect_check = QCheckBox("Lock aspect ratio")
-        self.aspect_check.setToolTip("Prevent stamp from stretching — keep original image proportions")
+        page_row.addWidget(self.radio_last)
+        page_row.addWidget(self.radio_first)
+        page_row.addStretch()
+        self.aspect_check = QCheckBox("Lock aspect")
+        self.aspect_check.setToolTip("Prevent stamp from stretching — keep original proportions")
         self.aspect_check.setChecked(self.config.keep_aspect)
-        r_layout.addWidget(self.aspect_check)
+        page_row.addWidget(self.aspect_check)
+        s_layout.addLayout(page_row)
 
-        # rotation group
-        rot_grp = QGroupBox("Rotation")
+        # rotation group — compact single group, hint as tooltip
+        rot_grp = QGroupBox("Rotation  — drag ↻ handle (center pivot)")
+        rot_grp.setToolTip("Drag the ↻ handle above the box or use slider. Granular 1° vs Snap 90° discrete.")
         rot_layout = QVBoxLayout(rot_grp)
         rot_layout.setContentsMargins(6, 6, 6, 6)
         rot_layout.setSpacing(6)
-        # slider + spin
         slider_row = QHBoxLayout()
         self.rotation_slider = QSlider(Qt.Horizontal)
         self.rotation_slider.setRange(0, 359)
@@ -136,27 +153,23 @@ class MainWindow(QMainWindow):
         self.rotation_spin.setRange(0, 359)
         self.rotation_spin.setSuffix("°")
         self.rotation_spin.setValue(int(self.config.rotation))
-        self.rotation_spin.setFixedWidth(70)
+        self.rotation_spin.setFixedWidth(68)
         slider_row.addWidget(self.rotation_spin)
         rot_layout.addLayout(slider_row)
-        # snap toggle + buttons
         snap_row = QHBoxLayout()
-        self.snap_check = QCheckBox("Snap 90° (Discrete)")
+        self.snap_check = QCheckBox("Snap 90°")
         self.snap_check.setChecked(self.config.rotation_snap_90)
-        self.snap_check.setToolTip("Toggle granular (1°) vs discrete (90° steps). Handle drag also snaps.")
+        self.snap_check.setToolTip("Toggle Granular 1° vs Discrete 90° steps. Handle drag also snaps.")
         snap_row.addWidget(self.snap_check)
         snap_row.addStretch()
         self.btn_rot_ccw = QPushButton("↺ 90°")
-        self.btn_rot_ccw.setFixedWidth(60)
+        self.btn_rot_ccw.setFixedWidth(56)
         self.btn_rot_cw = QPushButton("↻ 90°")
-        self.btn_rot_cw.setFixedWidth(60)
+        self.btn_rot_cw.setFixedWidth(56)
         snap_row.addWidget(self.btn_rot_ccw)
         snap_row.addWidget(self.btn_rot_cw)
         rot_layout.addLayout(snap_row)
-        rot_hint = QLabel("Drag ↻ handle above box — center pivot")
-        rot_hint.setStyleSheet("color: #888; font-size: 10px;")
-        rot_layout.addWidget(rot_hint)
-        r_layout.addWidget(rot_grp)
+        s_layout.addWidget(rot_grp)
         self._sync_rotation_ui()
 
         self.stack = QStackedWidget()
@@ -164,8 +177,10 @@ class MainWindow(QMainWindow):
         manual_page = QWidget()
         mp_layout = QVBoxLayout(manual_page)
         mp_layout.setContentsMargins(0, 0, 0, 0)
+        mp_layout.setSpacing(6)
         self.manual_info = QLabel("No files")
         self.manual_info.setStyleSheet("color: #333; font-weight: bold;")
+        self.manual_info.setWordWrap(True)
         mp_layout.addWidget(self.manual_info)
         nav = QHBoxLayout()
         self.manual_prev = QPushButton("◀ Prev")
@@ -174,33 +189,47 @@ class MainWindow(QMainWindow):
         nav.addWidget(self.manual_next)
         mp_layout.addLayout(nav)
         self.manual_stamp_btn = QPushButton("Stamp & Save This File")
-        self.manual_stamp_btn.setMinimumHeight(32)
+        self.manual_stamp_btn.setMinimumHeight(34)
         self.manual_stamp_btn.setStyleSheet("QPushButton { background: #34c759; color: white; font-weight: bold; border-radius: 6px; } QPushButton:disabled { background: #aaa; }")
         mp_layout.addWidget(self.manual_stamp_btn)
         self.manual_skip_btn = QPushButton("Skip This File")
         mp_layout.addWidget(self.manual_skip_btn)
+        mp_layout.addStretch()
         self.stack.addWidget(manual_page)
 
         # auto panel
         auto_page = QWidget()
         ap_layout = QVBoxLayout(auto_page)
         ap_layout.setContentsMargins(0, 0, 0, 0)
+        ap_layout.setSpacing(6)
         self.lock_btn = QPushButton("Lock Current as Standard")
         self.lock_btn.setCheckable(True)
         ap_layout.addWidget(self.lock_btn)
         self.standard_label = QLabel(self.config.label())
         self.standard_label.setStyleSheet("color: #333; font-size: 12px;")
+        self.standard_label.setWordWrap(True)
         ap_layout.addWidget(self.standard_label)
         self.start_btn = QPushButton("Start Batch")
         self.start_btn.setEnabled(False)
         self.start_btn.setMinimumHeight(36)
         self.start_btn.setStyleSheet("QPushButton { background: #0a84ff; color: white; font-weight: bold; border-radius: 6px; } QPushButton:disabled { background: #aaa; }")
         ap_layout.addWidget(self.start_btn)
+        ap_layout.addStretch()
         self.stack.addWidget(auto_page)
 
-        r_layout.addWidget(self.stack)
+        s_layout.addWidget(self.stack)
+        s_layout.addStretch()
 
-        r_layout.addWidget(QLabel("File Queue:"))
+        self.right_tabs.addTab(stamp_tab, "Stamp Tools")
+
+        # Queue tab — full-height table
+        queue_tab = QWidget()
+        q_layout = QVBoxLayout(queue_tab)
+        q_layout.setContentsMargins(6, 6, 6, 6)
+        q_layout.setSpacing(6)
+        self.queue_count = QLabel("No files")
+        self.queue_count.setStyleSheet("color: #888; font-size: 11px;")
+        q_layout.addWidget(self.queue_count)
         self.table = QTableWidget(0, 3)
         self.table.setHorizontalHeaderLabels(["Filename", "Status", "Dimensions"])
         hh = self.table.horizontalHeader()
@@ -210,7 +239,11 @@ class MainWindow(QMainWindow):
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.setAlternatingRowColors(True)
-        r_layout.addWidget(self.table, 1)
+        q_layout.addWidget(self.table)
+
+        self.right_tabs.addTab(queue_tab, "Queue")
+
+        r_layout.addWidget(self.right_tabs, 1)
 
         splitter.addWidget(right)
         splitter.setStretchFactor(0, 3)
@@ -254,6 +287,14 @@ class MainWindow(QMainWindow):
 
     def update_manual_ui(self):
         total = len(self.pdf_paths)
+        if hasattr(self, "queue_count"):
+            pending = sum(1 for r in range(self.table.rowCount()) if (self.table.item(r, 1) and self.table.item(r, 1).text() == "Pending"))
+            done = sum(1 for r in range(self.table.rowCount()) if (self.table.item(r, 1) and self.table.item(r, 1).text() == "Done"))
+            self.queue_count.setText(f"{total} files — {pending} pending, {done} done")
+            try:
+                self.right_tabs.setTabText(1, f"Queue ({total})")
+            except Exception:
+                pass
         if total == 0:
             self.manual_info.setText("No files")
             self.manual_prev.setEnabled(False)
