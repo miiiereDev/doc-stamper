@@ -121,7 +121,7 @@ class StamperWorker(QThread):
 
             try:
                 page = doc[page_idx]
-                page.insert_image(rect, filename=str(self.stamp_path), keep_proportion=False)
+                page.insert_image(rect, filename=str(self.stamp_path), keep_proportion=self.config.keep_aspect)
             except Exception as e:
                 try:
                     doc.close()
