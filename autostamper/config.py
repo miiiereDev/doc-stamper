@@ -12,7 +12,9 @@ class StampConfig:
     target_page: str = "last"
     tolerance: float = 3.0
     is_locked: bool = False
-    keep_aspect: bool = False
+    keep_aspect: bool = True
+    rotation: float = 0.0
+    rotation_snap_90: bool = False
 
     def is_valid(self) -> bool:
         return (
@@ -23,7 +25,13 @@ class StampConfig:
             and self.rel_x + self.rel_w <= 1.0
             and self.rel_y + self.rel_h <= 1.0
             and self.target_page in ("first", "last")
+            and 0.0 <= self.rotation < 360.0
         )
+
+    def normalize_rotation(self):
+        self.rotation = self.rotation % 360.0
+        if self.rotation_snap_90:
+            self.rotation = round(self.rotation / 90.0) * 90.0 % 360.0
 
     def violates_tolerance(self, w: float, h: float) -> bool:
         if not self.is_locked:

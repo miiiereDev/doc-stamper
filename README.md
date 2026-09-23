@@ -25,8 +25,9 @@ python autostamper.py
 1. **Pick mode** — Top of right panel: `Manual` (default) or `Automatic`.
 2. **Pick folder** — Browse for folder with PDFs. Files appear in the queue as Pending.
 3. **Pick stamp PNG** — Transparent PNG is recommended.
-4. **Adjust stamp box** — Drag inside the canvas to move, drag handles to resize. Box shows live preview; toggle **Lock aspect ratio** to keep proportions (prevents warping). Position is saved as ratio to page size.
-5. **Manual:** use `Prev`/`Next` or click queue, then `Stamp & Save This File` per file.
+4. **Adjust stamp box** — Drag inside the canvas to move, drag handles to resize. Box shows live preview; **Lock aspect ratio** is ON by default (global, session) and forced ON while rotated to prevent shear. Position is saved as ratio to page size.
+5. **Rotate** — Drag the ↻ handle above the box (center pivot) or use the Rotation slider/spinbox (0–359°). Toggle **Snap 90°** for granular (1°) vs discrete (90°) — discrete snaps handle + slider to 0/90/180/270. Rotation safest-bounds auto-fits (shift + shrink) so AABB never overflows page.
+6. **Manual:** use `Prev`/`Next` or click queue, then `Stamp & Save This File` per file.
    **Automatic:** optionally **Lock Current as Standard**, then **Start Batch** — Output goes to `<input>/.stamped/<filename>` with `garbage=3, deflate=True`.
 
 ## Dimension lock
@@ -39,10 +40,11 @@ If locked and next PDF size differs by more than 3 pt in width or height, the wo
 ```
 autostamper.py              # launcher
 autostamper/
-  config.py                 # StampConfig dataclass + tolerance
-  canvas.py                 # PDFCanvasWidget — pixmap, draggable box
-  worker.py                 # StamperWorker QThread + pause_event
-  main_window.py            # MainWindow layout + mismatch banner
+  config.py                 # StampConfig dataclass + tolerance + rotation
+  canvas.py                 # PDFCanvasWidget — pixmap, draggable box, rotate handle
+  image.py                  # rotate helper (Pillow + AABB)
+  worker.py                 # StamperWorker QThread + pause_event + rotated insert
+  main_window.py            # MainWindow layout + mismatch banner + rotation controls
 requirements.txt
 README.md
 ```
@@ -60,11 +62,12 @@ Modular layout is intentional — smaller files make bug tracking and revert eas
 - Only one PDF is open at a time; `doc.close()` + `del doc` each iteration — zero leak.
 - Scanning is case-insensitive deduped; preview on demand via `page.get_pixmap(dpi=96)` → `QPixmap`, no doc caching.
 - UI stays responsive — all I/O in `QThread`, progress via signals.
-- **Aspect lock:** when enabled, resize handles keep stamp proportions (uses `keep_proportion=True` on insert); otherwise free stretch (`keep_proportion=False` per spec). Page switch now always preserves aspect — height-anchored (`rel_h` constant, `rel_w = rel_h·aspect·H/W`) with safest-bounds shift if `rel_x+rel_w>1`; works even when lock is OFF so selector never warps on different W×H (decision A).
+ - **Aspect lock:** ON by default (global, session) — resize handles keep proportions (`keep_proportion=True`); forced ON while rotated to prevent shear, slider/toggle disabled. Free stretch still available when not rotated by unchecking. Page switch always preserves aspect — height-anchored (`rel_h` constant, `rel_w = rel_h·aspect·H/W`) with safest-bounds shift if `rel_x+rel_w>1` (decision A).
+ - **Rotation:** Center-pivot, toggle Granular (1°) vs Snap 90° discrete, draggable ↻ handle above box + slider/spinbox + ±90° buttons. Preview via `QPainter.translate→rotate`, PDF via Pillow `rotate(expand=True)` + `fitz.Pixmap(insert keep_proportion=True overlay=True)` centered on box. Overflow → safest-bounds shift + uniform shrink so rotated AABB `w' = w|c|+h|s` fits `0..1`.
 
 ## Tests
 ```bash
-pytest -v                  # unit tests: config, canvas, modes
+pytest -v                  # unit tests: config, canvas, modes, aspect, rotate
 python tests/test_worker.py         # integration: batch with mismatch
 python tests/test_worker_update.py  # integration: update/skip
 ```
@@ -76,6 +79,7 @@ Atomic commits using Conventional Commits (`feat:`, `fix:`, `chore:`, `docs:`, `
 - `feat(config):` StampConfig + keep_aspect
 - `feat(canvas):` overlay + aspect + preview
 - `feat(worker):` QThread loop
-- `feat(modes):` Manual/Automatic switch
-- `test(config/canvas/modes):` unit tests
-- `docs(readme):` this file
+ - `feat(modes):` Manual/Automatic switch
+ - `feat(rotate):` center-pivot rotate with handle, granular/discrete toggle, safest bounds + force aspect
+ - `test(config/canvas/modes/rotate):` unit tests
+ - `docs(readme):` this file

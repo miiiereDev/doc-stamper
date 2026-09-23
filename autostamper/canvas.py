@@ -1,14 +1,17 @@
+import math
 from pathlib import Path
 
 import fitz
 from PySide6.QtCore import Qt, Signal, QRectF, QPointF
-from PySide6.QtGui import QPixmap, QImage, QPainter, QPen, QColor, QBrush
+from PySide6.QtGui import QPixmap, QImage, QPainter, QPen, QColor, QBrush, QPolygonF, QTransform
 from PySide6.QtWidgets import QWidget
 
 from .config import StampConfig
 
 
 HANDLE_SIZE = 8
+ROTATION_HANDLE_OFFSET = 22
+ROTATION_HANDLE_RADIUS = 7
 
 
 class PDFCanvasWidget(QWidget):
@@ -29,13 +32,161 @@ class PDFCanvasWidget(QWidget):
 
         self._dragging = False
         self._resizing = False
+        self._rotating = False
         self._resize_dir: str | None = None
         self._drag_start = QPointF()
         self._orig_rect = QRectF()
+        self._rotate_start_angle = 0.0
+        self._rotate_orig = 0.0
 
         self.setMouseTracking(True)
         self.setMinimumSize(400, 300)
         self.setStyleSheet("background: #2b2b2b;")
+
+    # ---------- helpers ----------
+    def _rotation_rad(self) -> float:
+        return math.radians(self.config.rotation % 360)
+
+    def _rotated_aabb_norm(self, rel_w=None, rel_h=None, rotation=None):
+        rw = rel_w if rel_w is not None else self.config.rel_w
+        rh = rel_h if rel_h is not None else self.config.rel_h
+        rot = rotation if rotation is not None else self.config.rotation
+        if rot % 360 == 0:
+            return rw, rh
+        rad = math.radians(rot % 360)
+        c = abs(math.cos(rad))
+        s = abs(math.sin(rad))
+        w_px = rw * self._page_w
+        h_px = rh * self._page_h
+        w2 = w_px * c + h_px * s
+        h2 = w_px * s + h_px * c
+        return w2 / max(0.001, self._page_w), h2 / max(0.001, self._page_h)
+
+    def _rotated_aabb_display(self, w: float, h: float, rotation=None):
+        rot = rotation if rotation is not None else self.config.rotation
+        if rot % 360 == 0:
+            return w, h
+        rad = math.radians(rot % 360)
+        c = abs(math.cos(rad))
+        s = abs(math.sin(rad))
+        return w * c + h * s, w * s + h * c
+
+    def _aabb_center_display(self) -> QPointF:
+        return self._stamp_rect().center()
+
+    def _rotation_handle_pos(self) -> QPointF:
+        r = self._stamp_rect()
+        if r.isEmpty():
+            return QPointF()
+        # handle sits north of box, above top edge
+        # compute top-center, then offset north
+        c = r.center()
+        # for visual, handle position rotates with box? Keep orbit with box for intuitiveness
+        # We'll place it north of the rotated box's top edge — i.e., from center, vector (0, -h/2 - offset) rotated
+        rot = self.config.rotation % 360
+        if rot == 0:
+            return QPointF(c.x(), r.top() - ROTATION_HANDLE_OFFSET)
+        # rotate offset vector
+        rad = math.radians(rot)
+        # vector from center to top-center is (0, -h/2)
+        # we want center + rotate(0, -h/2 - offset)
+        vx = 0
+        vy = -r.height() / 2 - ROTATION_HANDLE_OFFSET
+        rx = vx * math.cos(rad) - vy * math.sin(rad)
+        ry = vx * math.sin(rad) + vy * math.cos(rad)
+        return QPointF(c.x() + rx, c.y() + ry)
+
+    def _rotated_polygon(self) -> QPolygonF:
+        r = self._stamp_rect()
+        if r.isEmpty():
+            return QPolygonF()
+        rot = self.config.rotation % 360
+        if rot == 0:
+            return QPolygonF(r)
+        c = r.center()
+        t = QTransform()
+        t.translate(c.x(), c.y())
+        t.rotate(rot)
+        t.translate(-r.width() / 2, -r.height() / 2)
+        return t.map(QPolygonF(QRectF(0, 0, r.width(), r.height())))
+
+    def _ensure_rotation_fits(self):
+        """Safest bounds: shift then shrink uniformly if rotated AABB still overflows."""
+        if self._page_w <= 0 or self._page_h <= 0:
+            return
+        rot = self.config.rotation % 360
+        if rot == 0:
+            return
+        # force keep_aspect when rotated
+        if not self.config.keep_aspect:
+            self.config.keep_aspect = True
+        w_aabb, h_aabb = self._rotated_aabb_norm()
+        new_x = self.config.rel_x
+        new_y = self.config.rel_y
+        new_w = self.config.rel_w
+        new_h = self.config.rel_h
+        changed = False
+        # shrink if AABB larger than page
+        if w_aabb > 1.0 or h_aabb > 1.0:
+            scale = min(1.0 / max(0.001, w_aabb), 1.0 / max(0.001, h_aabb)) * 0.98
+            scale = max(0.02, min(1.0, scale))
+            new_w = max(0.02, new_w * scale)
+            new_h = max(0.02, new_h * scale)
+            w_aabb, h_aabb = self._rotated_aabb_norm(new_w, new_h, rot)
+            changed = True
+        # shift to fit
+        # compute AABB origin: unrotated top-left is (rel_x, rel_y) in norm;
+        # but rotated AABB's top-left is center - half_aabb
+        # center in norm: cx = rel_x + rel_w/2, cy = rel_y + rel_h/2
+        cx = new_x + new_w / 2
+        cy = new_y + new_h / 2
+        half_w = w_aabb / 2
+        half_h = h_aabb / 2
+        left = cx - half_w
+        top = cy - half_h
+        right = cx + half_w
+        bottom = cy + half_h
+        # shift center so AABB fits
+        if left < 0:
+            cx -= left
+            changed = True
+        if right > 1:
+            cx -= (right - 1)
+            changed = True
+        if top < 0:
+            cy -= top
+            changed = True
+        if bottom > 1:
+            cy -= (bottom - 1)
+            changed = True
+        # recompute rel_x/y from adjusted center
+        adj_x = cx - new_w / 2
+        adj_y = cy - new_h / 2
+        # also ensure unrotated rect itself not exceeding? Keep at least.
+        adj_x = max(0, min(adj_x, 1 - new_w))
+        adj_y = max(0, min(adj_y, 1 - new_h))
+        if abs(adj_x - self.config.rel_x) > 1e-6:
+            new_x = adj_x
+            changed = True
+        else:
+            new_x = self.config.rel_x if not changed else adj_x
+        if abs(adj_y - self.config.rel_y) > 1e-6:
+            new_y = adj_y
+            changed = True
+        if abs(new_w - self.config.rel_w) > 1e-6:
+            self.config.rel_w = new_w
+            changed = True
+        if abs(new_h - self.config.rel_h) > 1e-6:
+            self.config.rel_h = new_h
+            changed = True
+        if abs(new_x - self.config.rel_x) > 1e-6:
+            self.config.rel_x = new_x
+            changed = True
+        if abs(new_y - self.config.rel_y) > 1e-6:
+            self.config.rel_y = new_y
+            changed = True
+        if changed:
+            self.config_changed.emit(self.config)
 
     def _preserve_aspect_height_anchored(self):
         """Enforce static aspect on page switch — always, height-anchored.
@@ -82,6 +233,9 @@ class PDFCanvasWidget(QWidget):
             changed = True
         if changed:
             self.config_changed.emit(self.config)
+        # after aspect fix, ensure rotated AABB still fits
+        if self.config.rotation % 360 != 0:
+            self._ensure_rotation_fits()
 
     def set_stamp(self, png_path: Path | str | None):
         if not png_path:
@@ -101,10 +255,16 @@ class PDFCanvasWidget(QWidget):
         # keep current page's box aspect-static even on stamp swap
         if self._pixmap:
             self._preserve_aspect_height_anchored()
+            if self.config.rotation % 360 != 0:
+                self._ensure_rotation_fits()
         self.update()
 
     def set_config(self, config: StampConfig):
         self.config = config
+        self.config.normalize_rotation()
+        # force keep_aspect if rotated
+        if self.config.rotation % 360 != 0 and not self.config.keep_aspect:
+            self.config.keep_aspect = True
         self.update()
 
     def load_pdf(self, pdf_path: Path, target_page: str = "last"):
@@ -134,6 +294,8 @@ class PDFCanvasWidget(QWidget):
             del doc
             # always keep aspect static on page change — height anchored, safest bounds
             self._preserve_aspect_height_anchored()
+            if self.config.rotation % 360 != 0:
+                self._ensure_rotation_fits()
             self.update()
             return True
         except Exception:
@@ -166,6 +328,9 @@ class PDFCanvasWidget(QWidget):
         r = self._stamp_rect()
         if r.isEmpty():
             return {}
+        # hide resize handles when rotated — force keep_aspect, avoid shear
+        if self.config.rotation % 360 != 0:
+            return {}
         hs = HANDLE_SIZE
         cx = r.center().x()
         cy = r.center().y()
@@ -181,9 +346,22 @@ class PDFCanvasWidget(QWidget):
         }
 
     def _hit_test(self, pos: QPointF) -> str | None:
+        # rotation handle highest priority
+        if self._pixmap and self.config.rotation is not None:
+            # only when stamp rect valid
+            r = self._stamp_rect()
+            if not r.isEmpty():
+                hp = self._rotation_handle_pos()
+                if math.hypot(pos.x() - hp.x(), pos.y() - hp.y()) <= ROTATION_HANDLE_RADIUS + 4:
+                    return "rotate"
+        # resize handles only when not rotated
         for k, rect in self._handle_rects().items():
             if rect.contains(pos):
                 return k
+        # move test: polygon contains
+        poly = self._rotated_polygon()
+        if not poly.isEmpty() and poly.containsPoint(pos, Qt.OddEvenFill):
+            return "move"
         if self._stamp_rect().contains(pos):
             return "move"
         return None
@@ -214,27 +392,81 @@ class PDFCanvasWidget(QWidget):
         painter.drawPixmap(target.toRect(), self._pixmap)
 
         r = self._stamp_rect()
+        rot = self.config.rotation % 360 if self.config.rotation else 0
+        # draw stamp pixmap
         if self._stamp_pixmap and not self._stamp_pixmap.isNull():
-            painter.setOpacity(0.85)
-            painter.drawPixmap(r.toRect(), self._stamp_pixmap)
-            painter.setOpacity(1.0)
+            if rot == 0:
+                painter.setOpacity(0.85)
+                painter.drawPixmap(r.toRect(), self._stamp_pixmap)
+                painter.setOpacity(1.0)
+            else:
+                painter.save()
+                c = r.center()
+                painter.translate(c)
+                painter.rotate(rot)
+                painter.translate(-r.width() / 2, -r.height() / 2)
+                painter.setOpacity(0.85)
+                painter.drawPixmap(QRectF(0, 0, r.width(), r.height()).toRect(), self._stamp_pixmap)
+                painter.setOpacity(1.0)
+                painter.restore()
         else:
-            painter.setBrush(QBrush(QColor(0, 191, 255, 40)))
-            painter.drawRect(r)
-            painter.setBrush(QBrush(Qt.NoBrush))
+            # placeholder
+            if rot == 0:
+                painter.setBrush(QBrush(QColor(0, 191, 255, 40)))
+                painter.drawRect(r)
+                painter.setBrush(QBrush(Qt.NoBrush))
+            else:
+                poly = self._rotated_polygon()
+                painter.setBrush(QBrush(QColor(0, 191, 255, 40)))
+                painter.setPen(Qt.NoPen)
+                painter.drawPolygon(poly)
+                painter.setBrush(QBrush(Qt.NoBrush))
+
+        # outline
         painter.setPen(QPen(QColor("#00BFFF"), 2, Qt.DashLine))
         painter.setBrush(QBrush(Qt.NoBrush))
-        painter.drawRect(r)
+        if rot == 0:
+            painter.drawRect(r)
+        else:
+            painter.drawPolygon(self._rotated_polygon())
 
+        # handles / rotation handle
         painter.setPen(QPen(QColor("#00BFFF"), 1))
         painter.setBrush(QBrush(QColor("#FFFFFF")))
-        for rect in self._handle_rects().values():
-            painter.drawRect(rect)
+        if rot == 0:
+            for rect in self._handle_rects().values():
+                painter.drawRect(rect)
+        # always draw rotation handle
+        hp = self._rotation_handle_pos()
+        if not hp.isNull():
+            # line from top-center to handle
+            if rot == 0:
+                c_top = QPointF(r.center().x(), r.top())
+            else:
+                # top-center of rotated polygon is approximated by handle line start
+                # we have center and handle pos, line from near edge to handle
+                poly = self._rotated_polygon()
+                # find closest point on polygon edge to handle — approximate using handle offset
+                # simple: line from center towards handle, intersection at half-height
+                rad = math.radians(rot)
+                vx = 0
+                vy = -r.height() / 2
+                rx = vx * math.cos(rad) - vy * math.sin(rad)
+                ry = vx * math.sin(rad) + vy * math.cos(rad)
+                c_top = QPointF(r.center().x() + rx, r.center().y() + ry)
+            painter.setPen(QPen(QColor("#00BFFF"), 1, Qt.SolidLine))
+            painter.drawLine(c_top, hp)
+            painter.setPen(QPen(QColor("#00BFFF"), 1))
+            painter.setBrush(QBrush(QColor("#FFFFFF")))
+            painter.drawEllipse(hp, ROTATION_HANDLE_RADIUS, ROTATION_HANDLE_RADIUS)
+            # small arc indicator
+            painter.setBrush(QBrush(Qt.NoBrush))
+            painter.drawEllipse(hp, 3, 3)
 
         painter.setPen(QColor("#FFF"))
         painter.drawText(
             int(r.left()), int(max(12, r.top() - 4)),
-            f"{self._page_w:.0f} x {self._page_h:.0f} pt"
+            f"{self._page_w:.0f} x {self._page_h:.0f} pt  {rot:.0f}°"
         )
 
     def mousePressEvent(self, event):
@@ -243,6 +475,13 @@ class PDFCanvasWidget(QWidget):
         pos = QPointF(event.position())
         hit = self._hit_test(pos)
         if not hit:
+            return
+        if hit == "rotate":
+            self._rotating = True
+            c = self._aabb_center_display()
+            self._rotate_start_angle = math.degrees(math.atan2(pos.y() - c.y(), pos.x() - c.x()))
+            self._rotate_orig = self.config.rotation
+            self._orig_rect = self._stamp_rect()
             return
         if hit == "move":
             self._dragging = True
@@ -258,9 +497,11 @@ class PDFCanvasWidget(QWidget):
         if not self._pixmap:
             return
         pos = QPointF(event.position())
-        if not self._dragging and not self._resizing:
+        if not self._dragging and not self._resizing and not self._rotating:
             hit = self._hit_test(pos)
-            if hit in ("tl", "br"):
+            if hit == "rotate":
+                self.setCursor(Qt.CrossCursor)
+            elif hit in ("tl", "br"):
                 self.setCursor(Qt.SizeFDiagCursor)
             elif hit in ("tr", "bl"):
                 self.setCursor(Qt.SizeBDiagCursor)
@@ -277,21 +518,61 @@ class PDFCanvasWidget(QWidget):
         d = self._display_rect()
         if d.isEmpty():
             return
+
+        if self._rotating:
+            c = self._aabb_center_display()
+            cur_ang = math.degrees(math.atan2(pos.y() - c.y(), pos.x() - c.x()))
+            delta = cur_ang - self._rotate_start_angle
+            new_rot = (self._rotate_orig + delta) % 360
+            if self.config.rotation_snap_90:
+                new_rot = round(new_rot / 90) * 90 % 360
+            # force keep_aspect
+            if new_rot % 360 != 0 and not self.config.keep_aspect:
+                self.config.keep_aspect = True
+            self.config.rotation = new_rot
+            self._ensure_rotation_fits()
+            self.update()
+            self.config_changed.emit(self.config)
+            return
+
         dx = pos.x() - self._drag_start.x()
         dy = pos.y() - self._drag_start.y()
 
         if self._dragging:
-            new_x = self._orig_rect.x() + dx
-            new_y = self._orig_rect.y() + dy
-            new_x = max(d.left(), min(new_x, d.right() - self._orig_rect.width()))
-            new_y = max(d.top(), min(new_y, d.bottom() - self._orig_rect.height()))
-            self.config.rel_x = (new_x - d.x()) / d.width()
-            self.config.rel_y = (new_y - d.y()) / d.height()
+            rot = self.config.rotation % 360 if self.config.rotation else 0
+            if rot == 0:
+                new_x = self._orig_rect.x() + dx
+                new_y = self._orig_rect.y() + dy
+                new_x = max(d.left(), min(new_x, d.right() - self._orig_rect.width()))
+                new_y = max(d.top(), min(new_y, d.bottom() - self._orig_rect.height()))
+                self.config.rel_x = (new_x - d.x()) / d.width()
+                self.config.rel_y = (new_y - d.y()) / d.height()
+            else:
+                # use center + AABB half extents for clamp
+                w = self._orig_rect.width()
+                h = self._orig_rect.height()
+                hw2, hh2 = self._rotated_aabb_display(w, h, rot)
+                hw2 /= 2
+                hh2 /= 2
+                c0 = self._orig_rect.center()
+                nc = QPointF(c0.x() + dx, c0.y() + dy)
+                nc.setX(max(d.left() + hw2, min(nc.x(), d.right() - hw2)))
+                nc.setY(max(d.top() + hh2, min(nc.y(), d.bottom() - hh2)))
+                # convert back to rel_x/y from center
+                new_x = nc.x() - w / 2
+                new_y = nc.y() - h / 2
+                self.config.rel_x = (new_x - d.x()) / d.width()
+                self.config.rel_y = (new_y - d.y()) / d.height()
+                # post-move ensure still fits (shrinks if needed)
+                self._ensure_rotation_fits()
             self.update()
             self.config_changed.emit(self.config)
             return
 
         if self._resizing:
+            # when rotated, resizing is disabled via _handle_rects -> shouldn't reach here
+            if self.config.rotation % 360 != 0:
+                return
             r = QRectF(self._orig_rect)
             if "l" in self._resize_dir:
                 r.setLeft(min(r.right() - 12, r.left() + dx))
@@ -372,5 +653,6 @@ class PDFCanvasWidget(QWidget):
     def mouseReleaseEvent(self, event):
         self._dragging = False
         self._resizing = False
+        self._rotating = False
         self._resize_dir = None
         self.setCursor(Qt.ArrowCursor)

@@ -6,7 +6,8 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QLineEdit, QPushButton, QFileDialog, QSplitter,
     QGroupBox, QRadioButton, QCheckBox, QTableWidget, QTableWidgetItem,
-    QHeaderView, QProgressBar, QFrame, QMessageBox, QStackedWidget
+    QHeaderView, QProgressBar, QFrame, QMessageBox, QStackedWidget,
+    QSlider, QSpinBox
 )
 
 from .canvas import PDFCanvasWidget
@@ -27,6 +28,7 @@ class MainWindow(QMainWindow):
         self._mismatch_path: Path | None = None
         self.mode = "manual"
         self.manual_index = 0
+        self._updating_rotation = False
 
         self._build_ui()
         self._connect()
@@ -113,7 +115,49 @@ class MainWindow(QMainWindow):
 
         self.aspect_check = QCheckBox("Lock aspect ratio")
         self.aspect_check.setToolTip("Prevent stamp from stretching — keep original image proportions")
+        self.aspect_check.setChecked(self.config.keep_aspect)
         r_layout.addWidget(self.aspect_check)
+
+        # rotation group
+        rot_grp = QGroupBox("Rotation")
+        rot_layout = QVBoxLayout(rot_grp)
+        rot_layout.setContentsMargins(6, 6, 6, 6)
+        rot_layout.setSpacing(6)
+        # slider + spin
+        slider_row = QHBoxLayout()
+        self.rotation_slider = QSlider(Qt.Horizontal)
+        self.rotation_slider.setRange(0, 359)
+        self.rotation_slider.setValue(int(self.config.rotation))
+        self.rotation_slider.setTickPosition(QSlider.TicksBelow)
+        self.rotation_slider.setTickInterval(45)
+        self.rotation_slider.setSingleStep(1)
+        slider_row.addWidget(self.rotation_slider, 1)
+        self.rotation_spin = QSpinBox()
+        self.rotation_spin.setRange(0, 359)
+        self.rotation_spin.setSuffix("°")
+        self.rotation_spin.setValue(int(self.config.rotation))
+        self.rotation_spin.setFixedWidth(70)
+        slider_row.addWidget(self.rotation_spin)
+        rot_layout.addLayout(slider_row)
+        # snap toggle + buttons
+        snap_row = QHBoxLayout()
+        self.snap_check = QCheckBox("Snap 90° (Discrete)")
+        self.snap_check.setChecked(self.config.rotation_snap_90)
+        self.snap_check.setToolTip("Toggle granular (1°) vs discrete (90° steps). Handle drag also snaps.")
+        snap_row.addWidget(self.snap_check)
+        snap_row.addStretch()
+        self.btn_rot_ccw = QPushButton("↺ 90°")
+        self.btn_rot_ccw.setFixedWidth(60)
+        self.btn_rot_cw = QPushButton("↻ 90°")
+        self.btn_rot_cw.setFixedWidth(60)
+        snap_row.addWidget(self.btn_rot_ccw)
+        snap_row.addWidget(self.btn_rot_cw)
+        rot_layout.addLayout(snap_row)
+        rot_hint = QLabel("Drag ↻ handle above box — center pivot")
+        rot_hint.setStyleSheet("color: #888; font-size: 10px;")
+        rot_layout.addWidget(rot_hint)
+        r_layout.addWidget(rot_grp)
+        self._sync_rotation_ui()
 
         self.stack = QStackedWidget()
         # manual panel
@@ -293,7 +337,16 @@ class MainWindow(QMainWindow):
             (self.config.rel_y + self.config.rel_h) * H,
         )
         try:
-            page.insert_image(rect, filename=str(stamp_path), keep_proportion=self.config.keep_aspect)
+            if self.config.rotation % 360 != 0:
+                from .image import prepare_stamp_bytes
+                data = prepare_stamp_bytes(stamp_path, self.config.rotation)
+                if data:
+                    pix = __import__("fitz").Pixmap(data)
+                    page.insert_image(rect, pixmap=pix, keep_proportion=True, overlay=True)
+                else:
+                    page.insert_image(rect, filename=str(stamp_path), keep_proportion=True)
+            else:
+                page.insert_image(rect, filename=str(stamp_path), keep_proportion=self.config.keep_aspect)
         except Exception as e:
             doc.close()
             self.table.setItem(self.manual_index, 1, QTableWidgetItem("Skipped (Stamp Error)"))
@@ -319,6 +372,85 @@ class MainWindow(QMainWindow):
             self.progress.setValue(100)
             self.status_label.setText(f"Manual done — {len(self.pdf_paths)} files")
 
+    def _sync_rotation_ui(self):
+        self._updating_rotation = True
+        try:
+            v = int(round(self.config.rotation)) % 360
+            self.rotation_slider.setValue(v)
+            self.rotation_spin.setValue(v)
+            self.snap_check.setChecked(self.config.rotation_snap_90)
+            if self.config.rotation_snap_90:
+                self.rotation_slider.setSingleStep(90)
+                self.rotation_slider.setTickInterval(90)
+                self.rotation_spin.setSingleStep(90)
+            else:
+                self.rotation_slider.setSingleStep(1)
+                self.rotation_slider.setTickInterval(45)
+                self.rotation_spin.setSingleStep(1)
+            # force keep_aspect when rotated
+            if self.config.rotation % 360 != 0:
+                if not self.config.keep_aspect:
+                    self.config.keep_aspect = True
+                self.aspect_check.setChecked(True)
+                self.aspect_check.setEnabled(False)
+                self.aspect_check.setToolTip("Forced ON while rotated — prevents shear")
+            else:
+                self.aspect_check.setEnabled(True)
+                self.aspect_check.setToolTip("Prevent stamp from stretching — keep original image proportions")
+        finally:
+            self._updating_rotation = False
+
+    def _apply_rotation(self, value: float):
+        if self._updating_rotation:
+            return
+        v = float(value) % 360
+        if self.config.rotation_snap_90:
+            v = round(v / 90) * 90 % 360
+        self.config.rotation = v
+        if v % 360 != 0 and not self.config.keep_aspect:
+            self.config.keep_aspect = True
+        self.canvas.set_config(self.config)
+        self._sync_rotation_ui()
+        self.canvas.update()
+        self.status_label.setText(f"Rotation {v:.0f}° — {'Discrete 90°' if self.config.rotation_snap_90 else 'Granular 1°'} — drag ↻ handle or slider")
+
+    def on_rotation_slider(self, v: int):
+        if self._updating_rotation:
+            return
+        self._apply_rotation(float(v))
+        # sync spin without recursion
+        self._updating_rotation = True
+        self.rotation_spin.setValue(int(round(self.config.rotation)) % 360)
+        self._updating_rotation = False
+
+    def on_rotation_spin(self, v: int):
+        if self._updating_rotation:
+            return
+        self._apply_rotation(float(v))
+        self._updating_rotation = True
+        self.rotation_slider.setValue(int(round(self.config.rotation)) % 360)
+        self._updating_rotation = False
+
+    def on_snap_toggled(self, checked: bool):
+        self.config.rotation_snap_90 = bool(checked)
+        # snap current rotation
+        self.config.normalize_rotation()
+        if self.config.rotation % 360 != 0 and not self.config.keep_aspect:
+            self.config.keep_aspect = True
+        self.canvas.set_config(self.config)
+        self._sync_rotation_ui()
+        self.status_label.setText(f"Rotation mode {'Discrete 90°' if checked else 'Granular 1°'} — {self.config.rotation:.0f}°")
+
+    def nudge_rotation(self, delta: float):
+        new_v = (self.config.rotation + delta) % 360
+        if self.config.rotation_snap_90:
+            new_v = round(new_v / 90) * 90 % 360
+        self._apply_rotation(new_v)
+        self._updating_rotation = True
+        self.rotation_slider.setValue(int(round(self.config.rotation)) % 360)
+        self.rotation_spin.setValue(int(round(self.config.rotation)) % 360)
+        self._updating_rotation = False
+
     def _connect(self):
         self.browse_input_btn.clicked.connect(self.pick_input)
         self.browse_stamp_btn.clicked.connect(self.pick_stamp)
@@ -326,6 +458,11 @@ class MainWindow(QMainWindow):
         self.radio_manual.toggled.connect(self.on_mode_changed)
         self.lock_btn.clicked.connect(self.on_lock)
         self.aspect_check.toggled.connect(self.on_aspect_toggled)
+        self.rotation_slider.valueChanged.connect(self.on_rotation_slider)
+        self.rotation_spin.valueChanged.connect(self.on_rotation_spin)
+        self.snap_check.toggled.connect(self.on_snap_toggled)
+        self.btn_rot_ccw.clicked.connect(lambda: self.nudge_rotation(-90))
+        self.btn_rot_cw.clicked.connect(lambda: self.nudge_rotation(90))
         self.canvas.config_changed.connect(self.on_canvas_config)
         self.start_btn.clicked.connect(self.start_batch)
         self.manual_prev.clicked.connect(self.manual_prev_file)
@@ -408,6 +545,11 @@ class MainWindow(QMainWindow):
         self.canvas.set_config(self.config)
 
     def on_aspect_toggled(self, checked: bool):
+        # force ON while rotated
+        if self.config.rotation % 360 != 0 and not checked:
+            self.aspect_check.setChecked(True)
+            self.status_label.setText("Aspect forced ON while rotated — prevents shear")
+            return
         self.config.keep_aspect = checked
         if checked and self.canvas._stamp_pixmap and not self.canvas._stamp_pixmap.isNull():
             aspect = self.canvas._stamp_pixmap.width() / max(1, self.canvas._stamp_pixmap.height())
@@ -428,7 +570,18 @@ class MainWindow(QMainWindow):
 
     def on_canvas_config(self, cfg):
         self.config = cfg
-        self.aspect_check.setChecked(cfg.keep_aspect)
+        self.config.normalize_rotation()
+        # force keep_aspect while rotated
+        if self.config.rotation % 360 != 0 and not self.config.keep_aspect:
+            self.config.keep_aspect = True
+        self.aspect_check.setChecked(self.config.keep_aspect)
+        if self.config.rotation % 360 != 0:
+            self.aspect_check.setEnabled(False)
+            self.aspect_check.setToolTip("Forced ON while rotated — prevents shear")
+        else:
+            self.aspect_check.setEnabled(True)
+            self.aspect_check.setToolTip("Prevent stamp from stretching — keep original image proportions")
+        self._sync_rotation_ui()
         if self.config.is_locked:
             self.standard_label.setText(self.config.label())
 

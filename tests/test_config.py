@@ -6,7 +6,9 @@ def test_valid_default():
     assert c.is_valid()
     assert c.target_page == "last"
     assert not c.is_locked
-    assert not c.keep_aspect
+    assert c.keep_aspect
+    assert c.rotation == 0.0
+    assert not c.rotation_snap_90
 
 
 def test_invalid_rel():
@@ -46,3 +48,28 @@ def test_keep_aspect_flag():
     assert c.keep_aspect
     c.keep_aspect = False
     assert not c.keep_aspect
+
+
+def test_rotation_default():
+    c = StampConfig()
+    assert c.rotation == 0.0
+    assert c.is_valid()
+    c.rotation = 45
+    assert c.is_valid()
+    c.rotation = 360
+    assert not c.is_valid()
+    c.rotation = -10
+    assert not c.is_valid()
+
+
+def test_rotation_snap():
+    c = StampConfig(rotation=37, rotation_snap_90=True)
+    c.normalize_rotation()
+    assert c.rotation == 0
+    c.rotation = 47
+    c.normalize_rotation()
+    assert c.rotation == 90
+    c.rotation_snap_90 = False
+    c.rotation = 37
+    c.normalize_rotation()
+    assert c.rotation == 37

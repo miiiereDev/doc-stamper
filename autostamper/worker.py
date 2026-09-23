@@ -121,7 +121,16 @@ class StamperWorker(QThread):
 
             try:
                 page = doc[page_idx]
-                page.insert_image(rect, filename=str(self.stamp_path), keep_proportion=self.config.keep_aspect)
+                if self.config.rotation % 360 != 0:
+                    from .image import prepare_stamp_bytes
+                    data = prepare_stamp_bytes(self.stamp_path, self.config.rotation)
+                    if data:
+                        pix = fitz.Pixmap(data)
+                        page.insert_image(rect, pixmap=pix, keep_proportion=True, overlay=True)
+                    else:
+                        page.insert_image(rect, filename=str(self.stamp_path), keep_proportion=True)
+                else:
+                    page.insert_image(rect, filename=str(self.stamp_path), keep_proportion=self.config.keep_aspect)
             except Exception as e:
                 try:
                     doc.close()
