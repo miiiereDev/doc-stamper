@@ -209,6 +209,10 @@ class MainWindow(QMainWindow):
         self.standard_label.setStyleSheet("color: #333; font-size: 12px;")
         self.standard_label.setWordWrap(True)
         ap_layout.addWidget(self.standard_label)
+        self.aspect_halt_check = QCheckBox("Halt on aspect change (1.5%)")
+        self.aspect_halt_check.setChecked(self.config.halt_on_aspect_mismatch)
+        self.aspect_halt_check.setToolTip("Pause batch if aspect W/H differs >1.5% from Standard — prevents warped stamps. ON by default, works regardless of lock when Standard exists.")
+        ap_layout.addWidget(self.aspect_halt_check)
         self.start_btn = QPushButton("Start Batch")
         self.start_btn.setEnabled(False)
         self.start_btn.setMinimumHeight(36)
@@ -492,6 +496,12 @@ class MainWindow(QMainWindow):
         self.rotation_spin.setValue(int(round(self.config.rotation)) % 360)
         self._updating_rotation = False
 
+    def _stamped_names(self, folder: Path) -> set[str]:
+        stamped = folder / ".stamped"
+        if not stamped.exists():
+            return set()
+        return {p.name for p in list(stamped.glob("*.pdf")) + list(stamped.glob("*.PDF"))}
+
     def _connect(self):
         self.browse_input_btn.clicked.connect(self.pick_input)
         self.browse_stamp_btn.clicked.connect(self.pick_stamp)
@@ -499,6 +509,7 @@ class MainWindow(QMainWindow):
         self.radio_manual.toggled.connect(self.on_mode_changed)
         self.lock_btn.clicked.connect(self.on_lock)
         self.aspect_check.toggled.connect(self.on_aspect_toggled)
+        self.aspect_halt_check.toggled.connect(self.on_aspect_halt_toggled)
         self.rotation_slider.valueChanged.connect(self.on_rotation_slider)
         self.rotation_spin.valueChanged.connect(self.on_rotation_spin)
         self.snap_check.toggled.connect(self.on_snap_toggled)
@@ -537,11 +548,16 @@ class MainWindow(QMainWindow):
         self.pdf_paths = sorted(found.values())
         self.manual_index = 0
         self.table.setRowCount(0)
+        stamped_names = self._stamped_names(folder)
         for pdf in self.pdf_paths:
             row = self.table.rowCount()
             self.table.insertRow(row)
             self.table.setItem(row, 0, QTableWidgetItem(pdf.name))
-            self.table.setItem(row, 1, QTableWidgetItem("Pending"))
+            # already-done comparison: mark as Skipped (Already Done) but keep in table, Auto will skip via worker guard
+            if pdf.name in stamped_names:
+                self.table.setItem(row, 1, QTableWidgetItem("Skipped (Already Done)"))
+            else:
+                self.table.setItem(row, 1, QTableWidgetItem("Pending"))
             self.table.setItem(row, 2, QTableWidgetItem(""))
             self.table.item(row, 0).setData(Qt.UserRole, str(pdf))
 
@@ -609,6 +625,10 @@ class MainWindow(QMainWindow):
         self.canvas.update()
         self.status_label.setText(f"Aspect lock {'ON' if checked else 'OFF'} — {'proportions kept' if checked else 'free stretch'}")
 
+    def on_aspect_halt_toggled(self, checked: bool):
+        self.config.halt_on_aspect_mismatch = bool(checked)
+        self.status_label.setText(f"Aspect halt {'ON (1.5%)' if checked else 'OFF'} — {'pauses on W/H change' if checked else 'ignore aspect changes'}")
+
     def on_canvas_config(self, cfg):
         self.config = cfg
         self.config.normalize_rotation()
@@ -658,8 +678,18 @@ class MainWindow(QMainWindow):
 
         self.progress.setValue(0)
         self.status_label.setText(f"Processed 0 of {len(self.pdf_paths)} | Starting...")
+        # preserve Already Done marks, refresh from .stamped vs root comparison per-file
+        stamped = self._stamped_names(input_dir)
         for r in range(self.table.rowCount()):
-            self.table.setItem(r, 1, QTableWidgetItem("Pending"))
+            item = self.table.item(r, 0)
+            cur = self.table.item(r, 1).text() if self.table.item(r, 1) else "Pending"
+            if item and item.text() in stamped:
+                self.table.setItem(r, 1, QTableWidgetItem("Skipped (Already Done)"))
+            elif cur == "Skipped (Already Done)":
+                # was marked done but now removed from .stamped -> reset
+                self.table.setItem(r, 1, QTableWidgetItem("Pending"))
+            else:
+                self.table.setItem(r, 1, QTableWidgetItem("Pending"))
 
         self.start_btn.setEnabled(False)
         self.browse_input_btn.setEnabled(False)
@@ -676,17 +706,25 @@ class MainWindow(QMainWindow):
 
     def on_mismatch(self, path_str: str, page_idx: int, w: float, h: float):
         self._mismatch_path = Path(path_str)
-        self.mismatch_label.setText(f"Dimension Mismatch: {self._mismatch_path.name} ({w:.1f} x {h:.1f} pt)")
+        cur_aspect = w / h if h else 0
+        std_aspect = self.config.std_aspect
+        aspect_info = ""
+        if std_aspect and self.config.halt_on_aspect_mismatch:
+            diff_pct = abs(cur_aspect / std_aspect - 1) * 100 if std_aspect else 0
+            # show aspect detail when relevant
+            if self.config.violates_aspect(w, h) or diff_pct > 0.5:
+                aspect_info = f" | Aspect {cur_aspect:.3f} vs std {std_aspect:.3f} ({diff_pct:.1f}% off)"
+        self.mismatch_label.setText(f"Dimension Mismatch: {self._mismatch_path.name} ({w:.1f} x {h:.1f} pt){aspect_info}")
         self.mismatch_bar.setVisible(True)
         self.canvas.load_pdf(self._mismatch_path, self.config.target_page)
-        self.status_label.setText(f"Paused — mismatch {self._mismatch_path.name} ({w:.1f} x {h:.1f} pt)")
+        self.status_label.setText(f"Paused — mismatch {self._mismatch_path.name} ({w:.1f} x {h:.1f} pt){aspect_info}")
 
     def on_file_status(self, path_str: str, status: str):
         for r in range(self.table.rowCount()):
             item = self.table.item(r, 0)
             if item and item.data(Qt.UserRole) == path_str:
                 self.table.setItem(r, 1, QTableWidgetItem(status))
-                if status == "Mismatch":
+                if status in ("Mismatch", "Aspect Mismatch", "Mismatch (Aspect+Size)"):
                     self.table.setItem(r, 2, QTableWidgetItem(status))
                 break
 

@@ -58,6 +58,12 @@ class StamperWorker(QThread):
 
         for idx, pdf_path in enumerate(self.pdf_paths):
             pdf_path = Path(pdf_path)
+            # already-done guard — per-file root vs .stamped comparison, never overwrite in Auto
+            out_path = out_dir / pdf_path.name
+            if out_path.exists():
+                self.file_status.emit(str(pdf_path), "Skipped (Already Done)")
+                self.progress.emit(idx + 1, total, pdf_path.name)
+                continue
             try:
                 doc = fitz.open(str(pdf_path))
             except Exception as e:
@@ -93,8 +99,12 @@ class StamperWorker(QThread):
                 self.progress.emit(idx + 1, total, pdf_path.name)
                 continue
 
-            if self.config.violates_tolerance(w, h):
-                self.file_status.emit(str(pdf_path), "Mismatch")
+            # halt on dimension tolerance OR aspect ratio change (1.5% default, regardless of lock, reuse halt UI)
+            is_tolerance_mismatch = self.config.violates_tolerance(w, h)
+            is_aspect_mismatch = self.config.violates_aspect(w, h)
+            if is_tolerance_mismatch or is_aspect_mismatch:
+                status = "Aspect Mismatch" if is_aspect_mismatch and not is_tolerance_mismatch else "Mismatch" if not is_aspect_mismatch else "Mismatch (Aspect+Size)"
+                self.file_status.emit(str(pdf_path), status)
                 self.mismatch_detected.emit(str(pdf_path), page_idx, w, h)
                 self.pause_event.clear()
                 self.pause_event.wait()
