@@ -99,28 +99,24 @@ class StamperWorker(QThread):
                 self.progress.emit(idx + 1, total, pdf_path.name)
                 continue
 
-            # halt on dimension tolerance OR aspect ratio change (1.5% default, regardless of lock, reuse halt UI)
+            # halt on dimension tolerance OR aspect ratio change (20% default, regardless of lock) — auto-skip or abort
             is_tolerance_mismatch = self.config.violates_tolerance(w, h)
             is_aspect_mismatch = self.config.violates_aspect(w, h)
             if is_tolerance_mismatch or is_aspect_mismatch:
                 status = "Aspect Mismatch" if is_aspect_mismatch and not is_tolerance_mismatch else "Mismatch" if not is_aspect_mismatch else "Mismatch (Aspect+Size)"
                 self.file_status.emit(str(pdf_path), status)
                 self.mismatch_detected.emit(str(pdf_path), page_idx, w, h)
-                self.pause_event.clear()
-                self.pause_event.wait()
-                if self._action == "skip":
-                    try:
-                        doc.close()
-                    except Exception:
-                        pass
-                    self.file_status.emit(str(pdf_path), "Skipped")
-                    self.progress.emit(idx + 1, total, pdf_path.name)
-                    self._action = None
+                try:
+                    doc.close()
+                except Exception:
+                    pass
+                self.progress.emit(idx + 1, total, pdf_path.name)
+                self._action = None
+                if self.config.auto_skip_mismatches:
+                    # automatically skip mismatches — keep status as Mismatch for manual review, continue batch
                     continue
-                if self._action == "update_standard":
-                    self.config.std_width = w
-                    self.config.std_height = h
-                    self._action = None
+                # abort batch completely — remaining files stay Pending, user can switch to Manual
+                break
 
             rect = fitz.Rect(
                 self.config.rel_x * w,

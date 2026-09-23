@@ -16,7 +16,8 @@ class StampConfig:
     rotation: float = 0.0
     rotation_snap_90: bool = False
     halt_on_aspect_mismatch: bool = True
-    aspect_tolerance: float = 0.015
+    aspect_tolerance: float = 0.20
+    auto_skip_mismatches: bool = False
 
     def is_valid(self) -> bool:
         return (
