@@ -2,6 +2,24 @@
 
 Standalone desktop app that batch-applies a transparent PNG stamp across PDFs in a folder.
 
+## Portable (No Install)
+Office USB tool — no Python needed.
+- **Single-file:** `AutoStamper.exe` (71 MB) — copy to USB, double-click. Extracts to `%TEMP%` on first run (3-4s), then runs. Single file to carry.
+- **Folder:** `AutoStamper-portable/AutoStamper.exe` (170 MB folder, 76 MB ZIP) — faster start (1s), friendlier to antivirus, also portable.
+
+Both write only `.stamped/` beside input folder, no registry/`%APPDATA%`, no admin.
+
+```powershell
+# From USB or any folder
+.\AutoStamper.exe
+# or
+.\AutoStamper-portable\AutoStamper.exe
+```
+
+Build yourself: `pip install pyinstaller` then `.\build.ps1 -Target all` — output `dist/` (`BUILD.md` details, `AutoStamper-OneFile.spec` / `AutoStamper-Onedir.spec` lean 71 MB).
+
+SHA256 (2026-09-23): `AutoStamper-Portable-SingleFile.zip` `E44A9B0F14A6F...B0CE0` | `AutoStamper-Portable.zip` `B8C4B69720CD...DDB8FC7`
+
 ## Stack
 - Python 3.10+ (tested 3.12)
 - PySide6 (Qt 6)
@@ -44,7 +62,10 @@ autostamper/
   canvas.py                 # PDFCanvasWidget — pixmap, draggable box, rotate handle
   image.py                  # rotate helper (Pillow + AABB)
   worker.py                 # StamperWorker QThread + pause_event + rotated insert
-  main_window.py            # MainWindow layout + mismatch banner + rotation controls
+  main_window.py            # MainWindow layout + tabbed Stamp Tools | Queue
+AutoStamper-OneFile.spec    # PyInstaller single-file (71 MB)
+AutoStamper-Onedir.spec     # PyInstaller onedir portable (170 MB)
+build.ps1 / BUILD.md        # build docs
 requirements.txt
 README.md
 ```
@@ -81,5 +102,7 @@ Atomic commits using Conventional Commits (`feat:`, `fix:`, `chore:`, `docs:`, `
 - `feat(worker):` QThread loop
  - `feat(modes):` Manual/Automatic switch
  - `feat(rotate):` center-pivot rotate with handle, granular/discrete toggle, safest bounds + force aspect
+ - `refactor(ui):` tabbed Stamp Tools | Queue — de-cluttered compact Mode/Page/Rotation
+ - `feat(portable):` PyInstaller lean specs, 71 MB single-file + 170 MB onedir, zero-install office USB
  - `test(config/canvas/modes/rotate):` unit tests
  - `docs(readme):` this file

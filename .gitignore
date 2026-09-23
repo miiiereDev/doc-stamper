@@ -32,3 +32,11 @@ tests/.stamped/
 sample/
 qa_sample/
 qa_sample/.stamped/
+
+# Portable build
+*.spec
+!AutoStamper-OneFile.spec
+!AutoStamper-Onedir.spec
+*.zip
+*.exe
+build*.log
