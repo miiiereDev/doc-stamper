@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QLineEdit, QPushButton, QFileDialog, QSplitter,
     QGroupBox, QRadioButton, QCheckBox, QTableWidget, QTableWidgetItem,
-    QHeaderView, QProgressBar, QFrame, QMessageBox
+    QHeaderView, QProgressBar, QFrame, QMessageBox, QStackedWidget
 )
 
 from .canvas import PDFCanvasWidget
@@ -25,9 +25,12 @@ class MainWindow(QMainWindow):
         self.worker: StamperWorker | None = None
         self.pause_event = threading.Event()
         self._mismatch_path: Path | None = None
+        self.mode = "manual"
+        self.manual_index = 0
 
         self._build_ui()
         self._connect()
+        self.set_mode("manual")
 
     def _build_ui(self):
         central = QWidget()
@@ -90,6 +93,15 @@ class MainWindow(QMainWindow):
         r_layout = QVBoxLayout(right)
         r_layout.setContentsMargins(6, 6, 6, 6)
 
+        mode_grp = QGroupBox("Mode")
+        m_layout = QVBoxLayout(mode_grp)
+        self.radio_manual = QRadioButton("Manual — One by one (Default)")
+        self.radio_auto = QRadioButton("Automatic — Batch with Standard")
+        self.radio_manual.setChecked(True)
+        m_layout.addWidget(self.radio_manual)
+        m_layout.addWidget(self.radio_auto)
+        r_layout.addWidget(mode_grp)
+
         grp = QGroupBox("Target Page")
         g_layout = QVBoxLayout(grp)
         self.radio_last = QRadioButton("Last Page (Default)")
@@ -99,17 +111,50 @@ class MainWindow(QMainWindow):
         g_layout.addWidget(self.radio_first)
         r_layout.addWidget(grp)
 
-        self.lock_btn = QPushButton("Lock Current as Standard")
-        self.lock_btn.setCheckable(True)
-        r_layout.addWidget(self.lock_btn)
-
-        self.standard_label = QLabel(self.config.label())
-        self.standard_label.setStyleSheet("color: #333; font-size: 12px;")
-        r_layout.addWidget(self.standard_label)
-
         self.aspect_check = QCheckBox("Lock aspect ratio")
         self.aspect_check.setToolTip("Prevent stamp from stretching — keep original image proportions")
         r_layout.addWidget(self.aspect_check)
+
+        self.stack = QStackedWidget()
+        # manual panel
+        manual_page = QWidget()
+        mp_layout = QVBoxLayout(manual_page)
+        mp_layout.setContentsMargins(0, 0, 0, 0)
+        self.manual_info = QLabel("No files")
+        self.manual_info.setStyleSheet("color: #333; font-weight: bold;")
+        mp_layout.addWidget(self.manual_info)
+        nav = QHBoxLayout()
+        self.manual_prev = QPushButton("◀ Prev")
+        self.manual_next = QPushButton("Next ▶")
+        nav.addWidget(self.manual_prev)
+        nav.addWidget(self.manual_next)
+        mp_layout.addLayout(nav)
+        self.manual_stamp_btn = QPushButton("Stamp & Save This File")
+        self.manual_stamp_btn.setMinimumHeight(32)
+        self.manual_stamp_btn.setStyleSheet("QPushButton { background: #34c759; color: white; font-weight: bold; border-radius: 6px; } QPushButton:disabled { background: #aaa; }")
+        mp_layout.addWidget(self.manual_stamp_btn)
+        self.manual_skip_btn = QPushButton("Skip This File")
+        mp_layout.addWidget(self.manual_skip_btn)
+        self.stack.addWidget(manual_page)
+
+        # auto panel
+        auto_page = QWidget()
+        ap_layout = QVBoxLayout(auto_page)
+        ap_layout.setContentsMargins(0, 0, 0, 0)
+        self.lock_btn = QPushButton("Lock Current as Standard")
+        self.lock_btn.setCheckable(True)
+        ap_layout.addWidget(self.lock_btn)
+        self.standard_label = QLabel(self.config.label())
+        self.standard_label.setStyleSheet("color: #333; font-size: 12px;")
+        ap_layout.addWidget(self.standard_label)
+        self.start_btn = QPushButton("Start Batch")
+        self.start_btn.setEnabled(False)
+        self.start_btn.setMinimumHeight(36)
+        self.start_btn.setStyleSheet("QPushButton { background: #0a84ff; color: white; font-weight: bold; border-radius: 6px; } QPushButton:disabled { background: #aaa; }")
+        ap_layout.addWidget(self.start_btn)
+        self.stack.addWidget(auto_page)
+
+        r_layout.addWidget(self.stack)
 
         r_layout.addWidget(QLabel("File Queue:"))
         self.table = QTableWidget(0, 3)
@@ -122,12 +167,6 @@ class MainWindow(QMainWindow):
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.setAlternatingRowColors(True)
         r_layout.addWidget(self.table, 1)
-
-        self.start_btn = QPushButton("Start Batch")
-        self.start_btn.setEnabled(False)
-        self.start_btn.setMinimumHeight(36)
-        self.start_btn.setStyleSheet("QPushButton { background: #0a84ff; color: white; font-weight: bold; border-radius: 6px; } QPushButton:disabled { background: #aaa; }")
-        r_layout.addWidget(self.start_btn)
 
         splitter.addWidget(right)
         splitter.setStretchFactor(0, 3)
@@ -145,14 +184,154 @@ class MainWindow(QMainWindow):
         bottom.addWidget(self.status_label, 2)
         main_layout.addLayout(bottom)
 
+    def set_mode(self, mode: str):
+        if self.worker and self.worker.isRunning():
+            QMessageBox.warning(self, "Busy", "Cannot switch mode while batch is running")
+            self.radio_manual.setChecked(mode == "manual")
+            self.radio_auto.setChecked(mode == "auto")
+            return
+        self.mode = mode
+        is_manual = mode == "manual"
+        self.stack.setCurrentIndex(0 if is_manual else 1)
+        self.mismatch_bar.setVisible(False)
+        self.update_manual_ui()
+        self.validate_start()
+        self.status_label.setText(f"Mode: {'Manual' if is_manual else 'Automatic'} — {'step through files' if is_manual else 'batch with standard'}")
+
+    def on_mode_changed(self):
+        if self.worker and self.worker.isRunning():
+            QMessageBox.warning(self, "Busy", "Cannot switch mode while batch is running")
+            # revert radios will be handled by set_mode guard
+            return
+        if self.radio_manual.isChecked():
+            self.set_mode("manual")
+        else:
+            self.set_mode("auto")
+
+    def update_manual_ui(self):
+        total = len(self.pdf_paths)
+        if total == 0:
+            self.manual_info.setText("No files")
+            self.manual_prev.setEnabled(False)
+            self.manual_next.setEnabled(False)
+            self.manual_stamp_btn.setEnabled(False)
+            self.manual_skip_btn.setEnabled(False)
+            return
+        self.manual_index = max(0, min(self.manual_index, total - 1))
+        cur = self.pdf_paths[self.manual_index]
+        status = self.table.item(self.manual_index, 1).text() if self.table.item(self.manual_index, 1) else "Pending"
+        self.manual_info.setText(f"File {self.manual_index + 1} of {total}: {cur.name} ({status})")
+        self.manual_prev.setEnabled(self.manual_index > 0)
+        self.manual_next.setEnabled(self.manual_index < total - 1)
+        has_stamp = bool(self.stamp_edit.text() and Path(self.stamp_edit.text()).exists())
+        self.manual_stamp_btn.setEnabled(has_stamp and status not in ("Done",))
+        self.manual_skip_btn.setEnabled(status not in ("Done", "Skipped"))
+        self.progress.setValue(int((self.manual_index / max(1, total)) * 100))
+
+    def manual_prev_file(self):
+        if self.manual_index > 0:
+            self.manual_index -= 1
+            self.canvas.load_pdf(self.pdf_paths[self.manual_index], self.config.target_page)
+            self.table.selectRow(self.manual_index)
+            self.update_manual_ui()
+
+    def manual_next_file(self):
+        if self.manual_index < len(self.pdf_paths) - 1:
+            self.manual_index += 1
+            self.canvas.load_pdf(self.pdf_paths[self.manual_index], self.config.target_page)
+            self.table.selectRow(self.manual_index)
+            self.update_manual_ui()
+
+    def manual_skip_current(self):
+        if not self.pdf_paths:
+            return
+        self.table.setItem(self.manual_index, 1, QTableWidgetItem("Skipped"))
+        self.update_manual_ui()
+        if self.manual_index < len(self.pdf_paths) - 1:
+            self.manual_next_file()
+        else:
+            self.status_label.setText("Manual: skipped last file")
+
+    def manual_stamp_current(self):
+        if not self.pdf_paths:
+            return
+        stamp_path = Path(self.stamp_edit.text())
+        if not stamp_path.exists():
+            QMessageBox.warning(self, "Missing", "Stamp PNG not found")
+            return
+        pdf_path = self.pdf_paths[self.manual_index]
+        input_dir = Path(self.input_edit.text())
+        if not input_dir.exists():
+            QMessageBox.warning(self, "Missing", "Input folder not found")
+            return
+        out_dir = input_dir / ".stamped"
+        try:
+            out_dir.mkdir(parents=True, exist_ok=True)
+        except PermissionError as e:
+            QMessageBox.warning(self, "Error", f"Cannot create output: {e}")
+            return
+        try:
+            doc = __import__("fitz").open(str(pdf_path))
+        except Exception as e:
+            self.table.setItem(self.manual_index, 1, QTableWidgetItem("Skipped (Corrupted)"))
+            self.status_label.setText(f"Corrupted {pdf_path.name}: {e}")
+            self.update_manual_ui()
+            return
+        if doc.is_encrypted:
+            doc.close()
+            self.table.setItem(self.manual_index, 1, QTableWidgetItem("Skipped (Encrypted)"))
+            self.update_manual_ui()
+            return
+        page_idx = 0 if self.config.target_page == "first" else len(doc) - 1
+        page = doc[page_idx]
+        W = float(page.rect.width)
+        H = float(page.rect.height)
+        rect = __import__("fitz").Rect(
+            self.config.rel_x * W,
+            self.config.rel_y * H,
+            (self.config.rel_x + self.config.rel_w) * W,
+            (self.config.rel_y + self.config.rel_h) * H,
+        )
+        try:
+            page.insert_image(rect, filename=str(stamp_path), keep_proportion=self.config.keep_aspect)
+        except Exception as e:
+            doc.close()
+            self.table.setItem(self.manual_index, 1, QTableWidgetItem("Skipped (Stamp Error)"))
+            self.status_label.setText(f"Stamp error {pdf_path.name}: {e}")
+            self.update_manual_ui()
+            return
+        out_path = out_dir / pdf_path.name
+        try:
+            doc.save(str(out_path), garbage=3, deflate=True)
+        except Exception as e:
+            doc.close()
+            self.table.setItem(self.manual_index, 1, QTableWidgetItem("Skipped (Save Error)"))
+            self.status_label.setText(f"Save error {pdf_path.name}: {e}")
+            self.update_manual_ui()
+            return
+        doc.close()
+        self.table.setItem(self.manual_index, 1, QTableWidgetItem("Done"))
+        self.status_label.setText(f"Stamped {pdf_path.name} → {out_path}")
+        self.update_manual_ui()
+        if self.manual_index < len(self.pdf_paths) - 1:
+            self.manual_next_file()
+        else:
+            self.progress.setValue(100)
+            self.status_label.setText(f"Manual done — {len(self.pdf_paths)} files")
+
     def _connect(self):
         self.browse_input_btn.clicked.connect(self.pick_input)
         self.browse_stamp_btn.clicked.connect(self.pick_stamp)
         self.radio_last.toggled.connect(self.on_target_changed)
+        self.radio_manual.toggled.connect(self.on_mode_changed)
         self.lock_btn.clicked.connect(self.on_lock)
         self.aspect_check.toggled.connect(self.on_aspect_toggled)
         self.canvas.config_changed.connect(self.on_canvas_config)
         self.start_btn.clicked.connect(self.start_batch)
+        self.manual_prev.clicked.connect(self.manual_prev_file)
+        self.manual_next.clicked.connect(self.manual_next_file)
+        self.manual_stamp_btn.clicked.connect(self.manual_stamp_current)
+        self.manual_skip_btn.clicked.connect(self.manual_skip_current)
         self.btn_apply_once.clicked.connect(self.on_apply_once)
         self.btn_update_std.clicked.connect(self.on_update_std)
         self.btn_skip.clicked.connect(self.on_skip)
@@ -178,6 +357,7 @@ class MainWindow(QMainWindow):
     def scan_pdfs(self, folder: Path):
         found = {p.resolve(): p for p in list(folder.glob("*.pdf")) + list(folder.glob("*.PDF"))}
         self.pdf_paths = sorted(found.values())
+        self.manual_index = 0
         self.table.setRowCount(0)
         for pdf in self.pdf_paths:
             row = self.table.rowCount()
@@ -200,12 +380,15 @@ class MainWindow(QMainWindow):
             self.lock_btn.setText("Lock Current as Standard")
             self.standard_label.setText(self.config.label())
 
+        self.update_manual_ui()
         self.validate_start()
 
     def on_target_changed(self):
         self.config.target_page = "first" if self.radio_first.isChecked() else "last"
         if self.pdf_paths:
-            self.canvas.load_pdf(self.pdf_paths[0], self.config.target_page)
+            idx = self.manual_index if self.mode == "manual" else 0
+            idx = max(0, min(idx, len(self.pdf_paths) - 1))
+            self.canvas.load_pdf(self.pdf_paths[idx], self.config.target_page)
             self.standard_label.setText(self.config.label())
 
     def on_lock(self, checked: bool):
@@ -252,7 +435,8 @@ class MainWindow(QMainWindow):
     def validate_start(self):
         has_input = bool(self.input_edit.text() and self.pdf_paths)
         has_stamp = bool(self.stamp_edit.text() and Path(self.stamp_edit.text()).exists())
-        self.start_btn.setEnabled(has_input and has_stamp and self.worker is None)
+        self.start_btn.setEnabled(has_input and has_stamp and self.worker is None and self.mode == "auto")
+        self.update_manual_ui()
 
     def on_table_click(self, row, _col):
         item = self.table.item(row, 0)
@@ -261,6 +445,9 @@ class MainWindow(QMainWindow):
         path = Path(str(item.data(Qt.UserRole)))
         if path.exists():
             self.canvas.load_pdf(path, self.config.target_page)
+            if self.mode == "manual":
+                self.manual_index = row
+                self.update_manual_ui()
 
     def start_batch(self):
         input_dir = Path(self.input_edit.text())
